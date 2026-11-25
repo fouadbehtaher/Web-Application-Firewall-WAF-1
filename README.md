@@ -111,6 +111,15 @@ curl "https://outerloop-waf.vercel.app/api/secure/test?payload=<script>alert(1)<
 curl "https://outerloop-waf.vercel.app/api/secure/test?payload=../../etc/passwd"
 ```
 
+### Extended Rules (added in the fork)
+Three more rule groups, each with tests in `tests/test_extended_rules.py`:
+
+- **SSRF**: URLs pointing at loopback, private ranges, the cloud metadata address, or `file://`, `gopher://`, `dict://`
+- **JNDI injection**: `${jndi:...}` lookups, including the `${${lower:j}ndi:...}` form
+- **XXE**: `<!DOCTYPE ... [` subsets and external `<!ENTITY ... SYSTEM>` declarations
+
+Public URLs pass through, and the tests cover both the blocked and the allowed cases. The XXE rules do not match plain XML on their own (checked at rule level). Known limit: through the full middleware, any body containing `</`, including plain XML, is still blocked by the existing CMDI-008 rule ("input redirection"). That upstream false positive is not changed here.
+
 ### Clean Request
 ```bash
 # Returns 200 OK - safe request passes through
