@@ -41,12 +41,18 @@ class SecurityRules:
     - Path traversal attempts
     - Command injection
     - Header manipulation
+    - Server-side request forgery (SSRF)
+    - JNDI lookup injection (Log4Shell style)
+    - XML external entities (XXE)
     """
     
     _sql_injection_patterns: List[SecurityRule] = field(default_factory=list)
     _xss_patterns: List[SecurityRule] = field(default_factory=list)
     _path_traversal_patterns: List[SecurityRule] = field(default_factory=list)
     _command_injection_patterns: List[SecurityRule] = field(default_factory=list)
+    _ssrf_patterns: List[SecurityRule] = field(default_factory=list)
+    _jndi_patterns: List[SecurityRule] = field(default_factory=list)
+    _xxe_patterns: List[SecurityRule] = field(default_factory=list)
     
     def __post_init__(self):
         """Initialize all security rule patterns."""
@@ -54,6 +60,9 @@ class SecurityRules:
         self._initialize_xss_rules()
         self._initialize_path_traversal_rules()
         self._initialize_command_injection_rules()
+        self._initialize_ssrf_rules()
+        self._initialize_jndi_rules()
+        self._initialize_xxe_rules()
     
     def _initialize_sql_injection_rules(self) -> None:
         """Define SQL injection detection patterns."""
@@ -155,13 +164,77 @@ class SecurityRules:
                 description=f"Detects {desc}"
             ))
     
+    def _initialize_ssrf_rules(self) -> None:
+        """
+        Define SSRF signatures (requests aimed at internal hosts).
+
+        These match request strings only. They do not replace validating the
+        destination inside the code that makes the outbound request.
+        """
+        host = r"https?://(?:[^/\s@?#]{0,100}@)?"
+        patterns = [
+            (host + r"(?:localhost|[a-z0-9-]+\.localhost|metadata\.google\.internal|metadata\.goog)\.?(?![\w.-])",
+             "Internal hostname"),
+            (host + r"(?:127(?:\.\d{1,3}){1,3}|0(?:\.0){0,3}|0x[0-9a-f]+(?:\.[0-9a-fx]+){0,3}|\d{8,10}|0\d+(?:\.\d+){0,3})(?![\w.-])",
+             "Loopback address (dotted, short, decimal, hex or octal form)"),
+            (host + r"(?:169\.254(?:\.\d{1,3}){2}|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}"
+                    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
+                    r"|100\.(?:6[4-9]|[7-9]\d|1[01]\d|12[0-7])(?:\.\d{1,3}){2})(?![\w.-])",
+             "Link-local, private or CGNAT address in URL"),
+            (host + r"\[(?:(?:0{0,4}:){1,7}0{0,3}1?|::ffff:[0-9a-f.:]+|f[cd][0-9a-f]{0,2}:[0-9a-f:]*"
+                    r"|fe[89ab][0-9a-f]:[0-9a-f:]*)\]",
+             "IPv6 loopback, mapped, unique-local or link-local address"),
+            (r"\b(?:file|gopher|dict)://", "Dangerous URL scheme"),
+        ]
+        for i, (pattern, desc) in enumerate(patterns):
+            self._ssrf_patterns.append(SecurityRule(
+                id=f"SSRF-{i+1:03d}",
+                name=f"SSRF: {desc}",
+                pattern=re.compile(pattern, re.IGNORECASE),
+                threat_level=ThreatLevel.HIGH,
+                description=f"Detects {desc}"
+            ))
+
+    def _initialize_jndi_rules(self) -> None:
+        """Define JNDI lookup injection patterns (Log4Shell style)."""
+        patterns = [
+            # Bounded repetition keeps this linear on long runs of "${".
+            (r"\$\{(?:[a-z:\-]|\$\{[^}]{0,40}\}){0,40}?ndi:", "JNDI lookup, including obfuscated forms"),
+        ]
+        for i, (pattern, desc) in enumerate(patterns):
+            self._jndi_patterns.append(SecurityRule(
+                id=f"JNDI-{i+1:03d}",
+                name=f"JNDI Injection: {desc}",
+                pattern=re.compile(pattern, re.IGNORECASE),
+                threat_level=ThreatLevel.CRITICAL,
+                description=f"Detects {desc}"
+            ))
+
+    def _initialize_xxe_rules(self) -> None:
+        """Define XML external entity (XXE) detection patterns."""
+        patterns = [
+            (r"<!DOCTYPE[^>]*\[", "DOCTYPE with internal subset"),
+            (r"<!ENTITY[^>]*\b(SYSTEM|PUBLIC)\b", "External entity declaration"),
+        ]
+        for i, (pattern, desc) in enumerate(patterns):
+            self._xxe_patterns.append(SecurityRule(
+                id=f"XXE-{i+1:03d}",
+                name=f"XXE: {desc}",
+                pattern=re.compile(pattern, re.IGNORECASE),
+                threat_level=ThreatLevel.HIGH,
+                description=f"Detects {desc}"
+            ))
+
     def get_all_rules(self) -> List[SecurityRule]:
         """Return all enabled security rules."""
         all_rules = (
             self._sql_injection_patterns +
             self._xss_patterns +
             self._path_traversal_patterns +
-            self._command_injection_patterns
+            self._command_injection_patterns +
+            self._ssrf_patterns +
+            self._jndi_patterns +
+            self._xxe_patterns
         )
         return [rule for rule in all_rules if rule.enabled]
     
