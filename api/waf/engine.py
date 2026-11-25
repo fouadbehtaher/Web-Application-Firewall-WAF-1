@@ -5,6 +5,7 @@ Core analysis engine that processes requests through the security
 rules pipeline and generates threat assessments.
 """
 
+import re
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +15,16 @@ from api.waf.rules import SecurityRules, SecurityRule, ThreatLevel
 from api.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_JSON_UNICODE = re.compile(r"\\u([0-9a-fA-F]{4})")
+
+
+def _decode_json_escapes(value: str) -> str:
+    """Undo JSON string escapes that hide characters in request bodies."""
+    if "\\" not in value:
+        return value
+    value = value.replace("\\/", "/")
+    return _JSON_UNICODE.sub(lambda m: chr(int(m.group(1), 16)), value)
 
 
 @dataclass
@@ -57,7 +68,12 @@ class RequestContext:
         ]
         
         # Include relevant header values
-        suspicious_headers = ["user-agent", "referer", "cookie", "x-forwarded-for"]
+        # Headers commonly logged or echoed by backends (JNDI lookups arrive here)
+        suspicious_headers = [
+            "user-agent", "referer", "cookie", "x-forwarded-for",
+            "x-api-version", "origin", "x-forwarded-host", "x-real-ip",
+            "accept-language", "x-requested-with",
+        ]
         for header in suspicious_headers:
             if header in self.headers:
                 parts.append(self.headers[header])
@@ -93,9 +109,9 @@ class WAFEngine:
         """
         decoded = content
         
-        # Multiple URL decode passes
-        for _ in range(3):
-            new_decoded = unquote(decoded)
+        # Bounded URL decode passes, plus JSON escapes (\/ and \uXXXX)
+        for _ in range(5):
+            new_decoded = _decode_json_escapes(unquote(decoded))
             if new_decoded == decoded:
                 break
             decoded = new_decoded
